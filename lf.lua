@@ -3,13 +3,15 @@
 local State = {
   path = "",
   cursor = 1,
+  top_index = 1,
   entries = {},
   running = true,
+  history = {},
 }
 
-local icons_up = "[up]";
-local icons_dir = "[d]";
-local icons_file = "[f]";
+local icons_up = "[up]"
+local icons_dir = "[d]"
+local icons_file = "[f]"
 
 local function get_absolute_path()
   local h = io.popen("pwd 2>/dev/null")
@@ -25,6 +27,10 @@ local function normalize_path(path)
     path = path:sub(1, -2)
   end
   return path
+end
+
+local function basename(path)
+  return path:match("([^/]+)$")
 end
 
 local function list_dir(path)
@@ -65,10 +71,45 @@ local function get_preview(path, limit)
 end
 
 local function cd(new_path)
+  -- Save current state before leaving
+  if State.path ~= "" and State.path ~= new_path then
+    State.history[State.path] = {
+      cursor = State.cursor,
+      top = State.top_index
+    }
+  end
+
   new_path = normalize_path(new_path)
   State.path = new_path
   State.entries = list_dir(new_path)
-  State.cursor = 1
+
+  -- Restore state if we've been here before
+  local hist = State.history[new_path]
+  if hist then
+    State.cursor = hist.cursor
+    State.top_index = hist.top
+  else
+    State.cursor = 1
+    State.top_index = 1
+  end
+end
+
+-- NEW: go up and focus on the directory we came from
+local function go_up()
+  if State.path == "/" then return end
+  local child = basename(State.path)
+  local parent = State.path:match("(.*)/")
+  if parent and parent ~= "" then
+    cd(parent)
+    if child then
+      for i, entry in ipairs(State.entries) do
+        if entry.name == child then
+          State.cursor = i
+          break
+        end
+      end
+    end
+  end
 end
 
 local function open_selection()
@@ -76,8 +117,7 @@ local function open_selection()
   if not entry then return end
   local full = State.path .. "/" .. entry.name
   if entry.is_parent then
-    local parent = State.path:match("(.*)/")
-    if parent and parent ~= "" then cd(parent) end
+    go_up()
   elseif entry.is_dir then
     cd(full)
   else
@@ -89,9 +129,17 @@ end
 
 local function get_key()
   os.execute("stty -echo raw 2>/dev/null")
-  local key = io.read(1)
+  local c = io.read(1)
   os.execute("stty echo -raw 2>/dev/null")
-  return key
+  if c == "\27" then
+    local seq = io.read(2)
+    if seq == "[A" then return "up"
+    elseif seq == "[B" then return "down"
+    elseif seq == "[C" then return "right"
+    elseif seq == "[D" then return "left"
+    else return "esc" end
+  end
+  return c
 end
 
 local function get_size()
@@ -108,7 +156,6 @@ local function render()
   local rows, cols = get_size()
   local selected = State.entries[State.cursor]
 
-  -- Ensure path is set
   if not State.path or State.path == "" then
     State.path = get_absolute_path()
   end
@@ -134,7 +181,7 @@ local function render()
     parent_preview = " ^ " .. str
   end
 
-  -- Header lines: path + up to two previews + blank separator
+  -- Header lines
   local header_lines = 1
   if selected_preview ~= "" then header_lines = header_lines + 1 end
   if parent_preview ~= "" then header_lines = header_lines + 1 end
@@ -142,17 +189,12 @@ local function render()
   local status_line = 1
   local max_list = rows - header_lines - status_line
 
-  io.write("\27[2J\27[H")  -- clear screen, home
+  io.write("\27[2J\27[H")
 
-  -- io.write("\n")  -- blank separator
-  -- Path at the very top
   io.write(State.path .. "\n")
-  -- io.write("Path: " .. State.path .. "\n")
-
-  -- Previews
   if selected_preview ~= "" then io.write(selected_preview .. "\n") end
   if parent_preview ~= "" then io.write(parent_preview .. "\n") end
-  io.write("\n")  -- blank separator
+  io.write("\n")
 
   -- File list
   local entries = State.entries
@@ -173,13 +215,11 @@ local function render()
     io.write(string.format("%s %s %s\n", mark, icon, name))
   end
 
-  -- Fill remaining lines with blanks to overwrite old content
   local used = header_lines + (finish - start + 1)
   for i = used, rows - 3 do
     io.write("\n")
   end
 
-  -- Status bar at bottom
   io.write(string.format(" %d/%d  j/k  l/open  h/up  q\n", State.cursor, total))
 end
 
@@ -191,15 +231,14 @@ local function main()
     local key = get_key()
     if key == "q" then
       State.running = false
-    elseif key == "j" or key == "\n" then
+    elseif key == "down" or key == "j" or key == "\n" then
       if State.cursor < #State.entries then State.cursor = State.cursor + 1 end
-    elseif key == "k" then
+    elseif key == "up" or key == "k" then
       if State.cursor > 1 then State.cursor = State.cursor - 1 end
-    elseif key == "l" or key == " " then
+    elseif key == "right" or key == "l" or key == " " then
       open_selection()
-    elseif key == "h" or key == "\27" then
-      local parent = State.path:match("(.*)/")
-      if parent and parent ~= "" then cd(parent) end
+    elseif key == "left" or key == "h" or key == "\27" then
+      go_up()
     end
   end
 end
