@@ -9,6 +9,9 @@ local State = {
   history = {},
 }
 
+-- You can change this default opener
+local DEFAULT_OPENER = "less"
+
 local icons_up = "[up]"
 local icons_dir = "[d]"
 local icons_file = "[f]"
@@ -71,7 +74,6 @@ local function get_preview(path, limit)
 end
 
 local function cd(new_path)
-  -- Save current state before leaving
   if State.path ~= "" and State.path ~= new_path then
     State.history[State.path] = {
       cursor = State.cursor,
@@ -83,7 +85,6 @@ local function cd(new_path)
   State.path = new_path
   State.entries = list_dir(new_path)
 
-  -- Restore state if we've been here before
   local hist = State.history[new_path]
   if hist then
     State.cursor = hist.cursor
@@ -94,7 +95,6 @@ local function cd(new_path)
   end
 end
 
--- NEW: go up and focus on the directory we came from
 local function go_up()
   if State.path == "/" then return end
   local child = basename(State.path)
@@ -112,6 +112,23 @@ local function go_up()
   end
 end
 
+local function open_file(filepath)
+  -- Restore terminal to normal input mode so user can type
+  os.execute("stty echo -raw 2>/dev/null")
+  -- Show prompt
+  io.write("\nOpen with (default: " .. DEFAULT_OPENER .. "): ")
+  local cmd = io.read()
+  if cmd == "" then
+    cmd = DEFAULT_OPENER
+  end
+  -- Execute command with file path quoted (to handle spaces)
+  os.execute(cmd .. " \"" .. filepath .. "\" 2>/dev/null &")
+  io.write("Press Enter to continue...")
+  io.read()
+  -- Go back to raw mode
+  os.execute("stty -echo raw 2>/dev/null")
+end
+
 local function open_selection()
   local entry = State.entries[State.cursor]
   if not entry then return end
@@ -121,9 +138,11 @@ local function open_selection()
   elseif entry.is_dir then
     cd(full)
   else
-    os.execute("open " .. full .. " 2>/dev/null &")
-    io.write("\nOpened: " .. full .. " (press Enter)")
-    io.read()
+    -- os.execute("open " .. full .. " 2>/dev/null &")
+    -- io.write("\nOpened: " .. full .. " (press Enter)")
+    -- io.read()
+    
+    open_file(full)
   end
 end
 
@@ -181,7 +200,6 @@ local function render()
     parent_preview = " ^ " .. str
   end
 
-  -- Header lines
   local header_lines = 1
   if selected_preview ~= "" then header_lines = header_lines + 1 end
   if parent_preview ~= "" then header_lines = header_lines + 1 end
@@ -196,7 +214,6 @@ local function render()
   if parent_preview ~= "" then io.write(parent_preview .. "\n") end
   io.write("\n")
 
-  -- File list
   local entries = State.entries
   local total = #entries
   local start = math.max(1, State.cursor - math.floor(max_list/2))
